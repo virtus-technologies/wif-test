@@ -15,14 +15,20 @@ param(
     [string]$GitHubOrg
 )
 
-Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# -- Transcript (log file) -----------------------------------------------------
+$LogDir  = Join-Path $PSScriptRoot "..\logs"
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+$LogFile = Join-Path $LogDir ("setup-oidc_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
+Start-Transcript -Path $LogFile -Append
+Write-Host "Logging to: $LogFile"
+
 # -- Known values --------------------------------------------------------------
-$APP_NAME        = ""
-$GITHUB_REPO     = ""
-$SUBSCRIPTION_ID = ""
-$RESOURCE_GROUP  = ""
+$APP_NAME        = "[APP_NAME]"
+$GITHUB_REPO     = "[GITHUB_REPO]"
+$SUBSCRIPTION_ID = "[SUBSCRIPTION_ID]"
+$RESOURCE_GROUP  = "[RESOURCE_GROUP]"
 
 # -- Helpers -------------------------------------------------------------------
 function Write-Step([string]$msg) {
@@ -36,6 +42,14 @@ function Write-Ok([string]$msg)   { Write-Host "  [OK] $msg" -ForegroundColor Gr
 function Write-Info([string]$msg) { Write-Host "  [..] $msg" -ForegroundColor Gray  }
 function Write-Fail([string]$msg) { Write-Host "  [!!] $msg" -ForegroundColor Red   }
 
+function Assert-AzSuccess([string]$context) {
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Azure CLI command failed at: $context (exit code $LASTEXITCODE)"
+        Stop-Transcript
+        exit $LASTEXITCODE
+    }
+}
+
 # -- Pre-flight: verify az cli is logged in ------------------------------------
 Write-Step "Pre-flight checks"
 
@@ -48,6 +62,7 @@ Write-Ok "Logged in as: $($account.user.name)"
 Write-Ok "Using subscription: $($account.name) ($SUBSCRIPTION_ID)"
 
 az account set --subscription $SUBSCRIPTION_ID
+Assert-AzSuccess "account set"
 Write-Ok "Subscription set."
 
 # -- Step 1: App Registration --------------------------------------------------
@@ -59,6 +74,7 @@ if ($existing.Count -gt 0) {
     $APP = $existing[0]
 } else {
     $APP = az ad app create --display-name $APP_NAME | ConvertFrom-Json
+    Assert-AzSuccess "ad app create"
     Write-Ok "App Registration created."
 }
 
@@ -76,6 +92,7 @@ if ($existingSP.Count -gt 0) {
     $SP = $existingSP[0]
 } else {
     $SP = az ad sp create --id $CLIENT_ID | ConvertFrom-Json
+    Assert-AzSuccess "ad sp create"
     Write-Ok "Service Principal created."
 }
 
@@ -89,21 +106,24 @@ $SUBJECT = "repo:${GitHubOrg}/${GITHUB_REPO}:ref:refs/heads/main"
 Write-Info "Subject: $SUBJECT"
 
 $existingCred = az ad app federated-credential list --id $OBJECT_ID | ConvertFrom-Json |
-    Where-Object { $_.subject -eq $SUBJECT }
+    Where-Object { $_ -and $_.PSObject.Properties['subject'] -and $_.subject -eq $SUBJECT }
 
 if ($existingCred) {
     Write-Info "Federated credential for this subject already exists - skipping."
 } else {
-    $credHash = @{
+    $credJson = @{
         name        = "github-actions-main"
         issuer      = "https://token.actions.githubusercontent.com"
         subject     = $SUBJECT
         description = "GitHub Actions OIDC for $GITHUB_REPO main branch"
         audiences   = @("api://AzureADTokenExchange")
-    }
-    $credParams = $credHash | ConvertTo-Json -Compress
+    } | ConvertTo-Json
+    $credFile = [System.IO.Path]::GetTempFileName()
+    Set-Content -Path $credFile -Value $credJson -Encoding UTF8
 
-    az ad app federated-credential create --id $OBJECT_ID --parameters $credParams | Out-Null
+    az ad app federated-credential create --id $OBJECT_ID --parameters "@$credFile" | Out-Null
+    Assert-AzSuccess "ad app federated-credential create"
+    Remove-Item $credFile -Force
     Write-Ok "Federated credential created."
 }
 
@@ -114,7 +134,7 @@ $SCOPE = "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/provide
 Write-Info "Scope: $SCOPE"
 
 $existingRole = az role assignment list --assignee $SP_OBJECT_ID --scope $SCOPE | ConvertFrom-Json |
-    Where-Object { $_.roleDefinitionName -eq "Contributor" }
+    Where-Object { $_ -and $_.PSObject.Properties['roleDefinitionName'] -and $_.roleDefinitionName -eq "Contributor" }
 
 if ($existingRole) {
     Write-Info "Role assignment already exists - skipping."
@@ -123,6 +143,7 @@ if ($existingRole) {
         --assignee $SP_OBJECT_ID `
         --role "Contributor" `
         --scope $SCOPE | Out-Null
+    Assert-AzSuccess "role assignment create"
     Write-Ok "Role assigned."
 }
 
@@ -139,3 +160,6 @@ Write-Host "  AZURE_CLIENT_ID        = $CLIENT_ID"
 Write-Host "  AZURE_TENANT_ID        = $TENANT_ID"
 Write-Host "  AZURE_SUBSCRIPTION_ID  = $SUBSCRIPTION_ID"
 Write-Host ""
+
+Stop-Transcript
+Write-Host "Full log saved to: $LogFile" -ForegroundColor Gray

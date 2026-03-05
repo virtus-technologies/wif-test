@@ -1,7 +1,7 @@
 # Replace with your own values
-$APP_NAME        = ""
-$SUBSCRIPTION_ID = ""
-$RESOURCE_GROUP  = ""
+$APP_NAME        = "[APP_NAME]"
+$SUBSCRIPTION_ID = "[SUBSCRIPTION_ID]"
+$RESOURCE_GROUP  = "[RESOURCE_GROUP]"
 
 # Create the App Registration
 $APP       = az ad app create --display-name $APP_NAME | ConvertFrom-Json

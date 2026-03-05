@@ -8,8 +8,8 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$APP_NAME       = ""
-$RESOURCE_GROUP = ""
+$APP_NAME       = "[APP_NAME]"
+$RESOURCE_GROUP = "[RESOURCE_GROUP]"
 $ZIP_FILE       = "deploy.zip"
 
 # -- Helpers -------------------------------------------------------------------

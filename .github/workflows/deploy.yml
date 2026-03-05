@@ -1,0 +1,59 @@
+name: Deploy to Azure App Service
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Required for OIDC token generation — do NOT remove these permissions
+permissions:
+  id-token: write   # lets GitHub mint an OIDC token for Azure login
+  contents: read    # lets the runner check out the repository
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Node.js ────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # ── 3. Install dependencies ──────────────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      # ── 4. Login to Azure via OIDC (no secrets stored, no expiry) ────────────
+      #
+      #   Requires three repository secrets (Settings → Secrets → Actions):
+      #     AZURE_CLIENT_ID      — App Registration (client) ID
+      #     AZURE_TENANT_ID      — Azure AD tenant ID
+      #     AZURE_SUBSCRIPTION_ID — the subscription that owns the App Service
+      #
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── 5. Deploy to Azure App Service ───────────────────────────────────────
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: "wif-test"   # must match your App Service name exactly
+          package: "."
+
+      # ── 6. Logout (best practice) ────────────────────────────────────────────
+      - name: Azure Logout
+        if: always()
+        run: az logout

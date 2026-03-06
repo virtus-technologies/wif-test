@@ -1,5 +1,6 @@
 const express = require("express");
 const axios = require("axios");
+const { readFile } = require("./gcs");
 
 const app = express();
 app.use(express.json());
@@ -41,8 +42,9 @@ app.get("/", (_req, res) => {
     app: "wif-test",
     description: "Node.js + Express demo deployed via OIDC / Workload Identity Federation",
     routes: [
-      { method: "GET", path: "/health",                        description: "Health check" },
+      { method: "GET", path: "/health",                              description: "Health check" },
       { method: "GET", path: "/currency?from=USD&to=EUR&amount=100", description: "Currency conversion" },
+      { method: "GET", path: "/files/read?file=ping.txt",            description: "Read file from GCS via WIF" },
     ],
   });
 });
@@ -107,6 +109,39 @@ app.get("/currency", async (req, res) => {
       durationMs: Date.now() - t0,
     });
     res.status(502).json({ error: "Failed to fetch exchange rates", detail: err.message });
+  }
+});
+
+/**
+ * GET /files/read?file=ping.txt
+ *
+ * Reads a file from a private GCS bucket using Workload Identity Federation.
+ * The Azure Managed Identity token is automatically exchanged for short-lived
+ * GCP credentials by the Google Auth Library.
+ */
+app.get("/files/read", async (req, res) => {
+  const fileName = req.query.file;
+  if (!fileName) {
+    return res.status(400).json({ error: "Missing required query parameter: file" });
+  }
+
+  const bucketName = process.env.GCS_BUCKET_NAME || "foca-assets";
+  log("INFO", "Reading file from GCS", { bucket: bucketName, file: fileName });
+
+  try {
+    const contents = await readFile(bucketName, fileName);
+    log("INFO", "File read from GCS", { bucket: bucketName, file: fileName });
+    console.log(`--- GCS file contents (${fileName}) ---`);
+    console.log(contents);
+    console.log("--- end ---");
+    res.json({ bucket: bucketName, file: fileName, contents });
+  } catch (err) {
+    log("ERROR", "Failed to read file from GCS", {
+      bucket: bucketName,
+      file: fileName,
+      error: err.message,
+    });
+    res.status(500).json({ error: "Failed to read file from GCS", detail: err.message });
   }
 });
 
